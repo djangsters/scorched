@@ -53,6 +53,7 @@ class SolrConnection(object):
         self.select_url = self.url + "select/"
         self.mlt_url = self.url + "mlt/"
         self.get_url = self.url + "get/"
+        self.suggest_url = self.url + "suggest/"
         self.retry_timeout = retry_timeout
         self.max_length_get_url = max_length_get_url
         self.search_timeout = search_timeout
@@ -220,6 +221,15 @@ class SolrConnection(object):
         if self.search_timeout != ():
             kwargs['timeout'] = self.search_timeout
         response = self.request(method, url, **kwargs)
+        if response.status_code != 200:
+            raise scorched.exc.SolrError(response)
+        return response.text
+
+    def suggest(self, params):
+        qs = scorched.compat.urlencode(params)
+        url = "%s?%s" % (self.suggest_url, qs)
+
+        response = self.request("GET", url)
         if response.status_code != 200:
             raise scorched.exc.SolrError(response)
         return response.text
@@ -417,6 +427,34 @@ class SolrInterface(object):
         ret = scorched.response.SolrResponse.from_get_json(
             self.conn.get(ids, fields), self._datefields)
         return ret
+
+    def suggest(self, q=None, **kwargs):
+        boolArgs = ['reload', 'reloadAll', 'build', 'buildAll']
+        otherArgs = ['count', 'dictionary']
+        params = {
+            "suggest": "true",
+            "wt": "json",
+        }
+        if q:
+            params["q"] = q
+        for arg, v in kwargs.items():
+            if arg not in boolArgs + otherArgs:
+                raise TypeError(
+                    "{} is not a valid argument for suggest()".format(arg))
+            if arg in boolArgs:
+                params["suggest." + arg] = "true" if v else "false"
+            else:
+                params["suggest." + arg] = v
+
+        data = json.loads(self.conn.suggest(params))
+
+        if "suggest" in data:
+            suggester = data["suggest"].popitem()[1]
+            suggest_term = suggester.popitem()[1]
+            suggestions = suggest_term["suggestions"]
+            return suggestions
+        else:
+            return None
 
     def search(self, **kwargs):
         """
