@@ -383,7 +383,7 @@ class BaseSearch(object):
                       'faceter', 'grouper', 'sorter', 'facet_querier',
                       'debugger', 'spellchecker', 'requesthandler',
                       'field_limiter', 'parser', 'pivoter', 'facet_ranger',
-                      'term_vectors')
+                      'term_vectors', 'result_constructor')
 
     def _init_common_modules(self):
         self.query_obj = LuceneQuery(u'q')
@@ -403,6 +403,7 @@ class BaseSearch(object):
         self.facet_ranger = FacetRangeOptions()
         self.facet_querier = FacetQueryOptions()
         self.term_vectors = TermVectorOptions()
+        self.result_constructor = ResultConstructor()
 
     def clone(self):
         return self.__class__(interface=self.interface, original=self)
@@ -549,18 +550,11 @@ class BaseSearch(object):
 
     def results_as(self, constructor):
         newself = self.clone()
+        newself.result_constructor.update(constructor)
         return newself
 
     def params(self):
         return params_from_dict(**self.options())
-
-    def constructor(self, result, constructor):
-        construct_docs = lambda docs: [constructor(**d) for d in docs]
-        result.result.docs = construct_docs(result.result.docs)
-        for key in result.more_like_these:
-            result.more_like_these[key].docs = construct_docs(
-                result.more_like_these[key].docs)
-        return result
 
     def __getitem__(self, key):
         if isinstance(key, int):
@@ -576,10 +570,12 @@ class SolrSearch(BaseSearch):
 
     def __init__(self, interface, original=None):
         self.interface = interface
+
         if original is None:
             self.more_like_this = MoreLikeThisOptions()
             self._init_common_modules()
         else:
+            self.result_constructor = original.result_constructor
             for opt in self.option_modules:
                 if hasattr(original, opt):
                     _attr = getattr(original, opt)
@@ -593,24 +589,26 @@ class SolrSearch(BaseSearch):
 
     def execute(self, constructor=None):
         ret = self.interface.search(**self.options())
+        search = self
         if constructor:
-            ret = self.constructor(ret, constructor)
-        return ret
+            search = search.results_as(constructor)
+        return search.result_constructor.transform_results(ret)
 
     def cursor(self, constructor=None, rows=None):
         if self.paginator.start is not None:
             raise ValueError(
                 "cannot use the start parameter and cursors at the same time")
         search = self
+        if constructor:
+            search = search.results_as(constructor)
         if rows:
             search = search.paginate(rows=rows)
-        return SolrCursor(search, constructor)
+        return SolrCursor(search)
 
 
 class SolrCursor:
-    def __init__(self, search, constructor):
+    def __init__(self, search):
         self.search = search
-        self.constructor = constructor
 
     def __iter__(self):
         cursor_mark = "*"
@@ -618,8 +616,7 @@ class SolrCursor:
             options = self.search.options()
             options['cursorMark'] = cursor_mark
             ret = self.search.interface.search(**options)
-            if self.constructor:
-                ret = self.search.constructor(ret, self.constructor)
+            ret = self.search.result_constructor.transform_results(ret)
             for item in ret:
                 yield item
             if ret.next_cursor_mark == cursor_mark:
@@ -700,9 +697,10 @@ class MltSolrSearch(BaseSearch):
 
     def execute(self, constructor=None):
         ret = self.interface.mlt_search(content=self.content, **self.options())
+        search = self
         if constructor:
-            ret = self.constructor(ret, constructor)
-        return ret
+            search = search.results_as(constructor)
+        return search.result_constructor.transform_results(ret)
 
 
 class Options(object):
@@ -1242,6 +1240,33 @@ class SpellcheckOptions(Options):
             return {"spellcheck": True}
         else:
             return {}
+
+
+class ResultConstructor:
+    def __init__(self):
+        self.constructor = None
+
+    def clone(self):
+        clone = self.__class__()
+        clone.constructor = self.constructor
+        return clone
+
+    def update(self, constructor):
+        self.constructor = constructor
+
+    def options(self):
+        return {}
+
+    def transform_results(self, result):
+        if not self.constructor:
+            return result
+        construct_docs = lambda docs: [
+            self.constructor(**d) for d in docs]
+        result.result.docs = construct_docs(result.result.docs)
+        for key in result.more_like_these:
+            result.more_like_these[key].docs = construct_docs(
+                result.more_like_these[key].docs)
+        return result
 
 
 class RequestHandlerOption(Options):
