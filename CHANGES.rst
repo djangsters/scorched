@@ -1,7 +1,17 @@
-0.9 (unreleased)
+0.10 (unreleased)
+-----------------
+
+- Return response for update actions (mamico)
+
+
+0.9 (2015-11-09)
 ----------------
 
-- Nothing changed yet.
+- Better check datetime dynamicfields (mamico)
+
+- RealTime Get (Chronial)
+
+- TermVector support (Chronial)
 
 
 0.8 (2015-08-26)

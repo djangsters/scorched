@@ -53,6 +53,20 @@ class SolrFacetCounts(object):
         return SolrFacetCounts(**facet_counts)
 
 
+class SolrUpdateResponse(object):
+    @classmethod
+    def from_json(cls, jsonmsg):
+        self = cls()
+        self.original_json = jsonmsg
+        doc = json.loads(jsonmsg)
+        details = doc['responseHeader']
+        for attr in ["QTime", "params", "status"]:
+            setattr(self, attr, details.get(attr))
+        if self.status != 0:
+            raise ValueError("Response indicates an error")
+        return self
+
+
 class SolrResponse(collections.Sequence):
 
     @classmethod
@@ -76,12 +90,22 @@ class SolrResponse(collections.Sequence):
         self.spellcheck = doc.get("spellcheck", {})
         self.groups = doc.get('grouped', {})
         self.debug = doc.get('debug', {})
+        self.next_cursor_mark = doc.get('nextCursorMark')
         self.more_like_these = dict(
             (k, SolrResult.from_json(v, datefields))
             for (k, v) in list(doc.get('moreLikeThis', {}).items()))
         self.term_vectors = self.parse_term_vectors(doc.get('termVectors', []))
         # can be computed by MoreLikeThisHandler
         self.interesting_terms = doc.get('interestingTerms', None)
+        return self
+
+    @classmethod
+    def from_get_json(cls, jsonmsg, datefields=()):
+        """Generate instance from the response of a RealTime Get"""
+        self = cls()
+        self.original_json = jsonmsg
+        doc = json.loads(jsonmsg)
+        self.result = SolrResult.from_json(doc['response'], datefields)
         return self
 
     @classmethod
@@ -126,9 +150,7 @@ class SolrResult(object):
     def _prepare_docs(self, docs, datefields):
         for doc in docs:
             for name, value in list(doc.items()):
-                if name in datefields:
-                    doc[name] = scorched.dates.solr_date(value)._dt_obj
-                elif name.endswith(datefields):
+                if scorched.dates.is_datetime_field(name, datefields):
                     doc[name] = scorched.dates.solr_date(value)._dt_obj
         return docs
 
